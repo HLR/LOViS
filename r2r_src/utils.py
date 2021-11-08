@@ -672,3 +672,5 @@ class DTW(object):
 
     success = self.distance[prediction[-1]][reference[-1]] <= self.threshold
     return success * ndtw
+
+This is a test
