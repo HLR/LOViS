@@ -25,7 +25,9 @@ if not os.path.exists(log_dir):
     os.makedirs(log_dir)
 
 IMAGENET_FEATURES = 'img_features/ResNet-152-imagenet.tsv'
-PLACE365_FEATURES = 'img_features/ResNet-152-places365.tsv'
+PLACE365_FEATURES = '/home/hlr/shared/data/joslin/img_features/ResNet-152-places365.tsv'
+result_path = "/home/joslin/Recurrent-VLN-BERT/result/"
+experiment_time = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
 
 if args.features == 'imagenet':
     features = IMAGENET_FEATURES
@@ -136,6 +138,11 @@ def train(train_env, tok, n_iters, log_every=2000, val_envs={}, aug_env=None):
         print(('%s (%d %d%%) %s' % (timeSince(start, float(iter)/n_iters),
                                              iter, float(iter)/n_iters*100, loss_str)))
 
+        with open(result_path+str(experiment_time)+".txt", "a") as f_result:
+            f_result.write(('%s (%d %d%%) %s' % (timeSince(start, float(iter)/n_iters),
+                                             iter, float(iter)/n_iters*100, loss_str)))
+            f_result.write('\n')
+
         if iter % 1000 == 0:
             print("BEST RESULT TILL NOW")
             for env_name in best_val:
@@ -193,7 +200,8 @@ def train_val(test_only=False):
         val_env_names = ['val_train_seen']
     else:
         featurized_scans = set([key.split("_")[0] for key in list(feat_dict.keys())])
-        val_env_names = ['val_train_seen', 'val_seen', 'val_unseen']
+        #val_env_names = ['val_train_seen', 'val_seen', 'val_unseen']
+        val_env_names = ['val_seen', 'val_unseen']
 
     train_env = R2RBatch(feat_dict, batch_size=args.batchSize, splits=['train'], tokenizer=tok)
     from collections import OrderedDict
@@ -236,7 +244,7 @@ def train_val_augment(test_only=False):
         val_env_names = ['val_train_seen']
     else:
         featurized_scans = set([key.split("_")[0] for key in list(feat_dict.keys())])
-        val_env_names = ['val_train_seen', 'val_seen', 'val_unseen']
+        val_env_names = ['val_seen', 'val_unseen']
 
     # Load the augmentation data
     aug_path = args.aug

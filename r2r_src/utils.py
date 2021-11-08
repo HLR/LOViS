@@ -3,7 +3,7 @@
 import os
 import sys
 import re
-sys.path.append('Matterport_Simulator/build/')
+sys.path.append('build/')
 import MatterSim
 import string
 import json
@@ -69,7 +69,7 @@ def load_datasets(splits):
         # if split in ['train', 'val_seen', 'val_unseen', 'test',
         #              'val_unseen_half1', 'val_unseen_half2', 'val_seen_half1', 'val_seen_half2']:       # Add two halves for sanity check
         if "/" not in split:
-            with open('data/R2R_%s.json' % split) as f:
+            with open('data/R2R_%s1.json' % split) as f:
                 new_data = json.load(f)
         else:
             print('\nLoading prevalent data for pretraining...')
@@ -673,4 +673,3 @@ class DTW(object):
     success = self.distance[prediction[-1]][reference[-1]] <= self.threshold
     return success * ndtw
 
-This is a test
