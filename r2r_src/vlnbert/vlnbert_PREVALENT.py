@@ -13,7 +13,8 @@ from io import open
 import torch
 from torch import nn
 from torch.nn import CrossEntropyLoss, MSELoss
-
+import sys
+sys.path.append("/home/joslin/Recurrent-VLN-BERT/")
 from transformers.pytorch_transformers.modeling_bert import BertPreTrainedModel, BertConfig
 import pdb
 
@@ -321,12 +322,12 @@ class LXRTXLayer(nn.Module):
 
     def forward(self, lang_feats, lang_attention_mask,
                       visn_feats, visn_attention_mask, tdx):
-
+    
         ''' visual self-attention with state '''
         visn_att_output = torch.cat((lang_feats[:, 0:1, :], visn_feats), dim=1)
         state_vis_mask = torch.cat((lang_attention_mask[:,:,:,0:1], visn_attention_mask), dim=-1)
-
-        ''' state and vision attend to language '''
+        
+        # ''' state and vision attend to language'''
         visn_att_output, cross_attention_scores = self.cross_att(lang_feats[:, 1:, :], lang_attention_mask[:, :, :, 1:], visn_att_output, state_vis_mask)
 
         language_attention_scores = cross_attention_scores[:, :, 0, :]
@@ -401,7 +402,7 @@ class VLNBert(BertPreTrainedModel):
             embedding_output = self.embeddings(input_ids, position_ids=position_ids, token_type_ids=token_type_ids)
             text_embeds = embedding_output
 
-            for layer_module in self.lalayer:
+            for layer_module in self.lalayer: # self attention
                 temp_output = layer_module(text_embeds, extended_attention_mask)
                 text_embeds = temp_output[0]
 
@@ -446,4 +447,4 @@ class VLNBert(BertPreTrainedModel):
             attended_language = (language_attention_probs * text_embeds[:, 1:, :]).sum(1)
             attended_visual = (visual_attention_probs * img_embedding_output).sum(1)
 
-            return pooled_output, visual_action_scores, attended_language, attended_visual
+            return pooled_output, visual_action_scores, attended_language, attended_visual, language_attention_probs.squeeze(-1)

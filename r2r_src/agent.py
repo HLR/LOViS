@@ -18,7 +18,8 @@ import torch.nn.functional as F
 from env import R2RBatch
 import utils
 from utils import padding_idx, print_progress
-import model_OSCAR, model_PREVALENT
+# YZ
+import model_OSCAR_obj, model_PREVALENT
 import param
 from param import args
 from collections import defaultdict
@@ -99,8 +100,8 @@ class Seq2SeqAgent(BaseAgent):
 
         # Models
         if args.vlnbert == 'oscar':
-            self.vln_bert = model_OSCAR.VLNBERT(feature_size=self.feature_size + args.angle_feat_size).cuda()
-            self.critic = model_OSCAR.Critic().cuda()
+            self.vln_bert = model_OSCAR_obj.VLNBERT(feature_size=self.feature_size + args.angle_feat_size).cuda() #YZ
+            self.critic = model_OSCAR_obj.Critic().cuda() #YZ
         elif args.vlnbert == 'prevalent':
             self.vln_bert = model_PREVALENT.VLNBERT(feature_size=self.feature_size + args.angle_feat_size).cuda()
             self.critic = model_PREVALENT.Critic().cuda()
@@ -119,6 +120,7 @@ class Seq2SeqAgent(BaseAgent):
         # Logs
         sys.stdout.flush()
         self.logs = defaultdict(list)
+        self.sort_tokens = {}
 
     def _sort_batch(self, obs):
         seq_tensor = np.array([ob['instr_encoding'] for ob in obs])
@@ -149,13 +151,18 @@ class Seq2SeqAgent(BaseAgent):
     def _candidate_variable(self, obs):
         candidate_leng = [len(ob['candidate']) + 1 for ob in obs]  # +1 is for the end
         candidate_feat = np.zeros((len(obs), max(candidate_leng), self.feature_size + args.angle_feat_size), dtype=np.float32)
+        candidate_obj_feat = np.zeros((len(obs), max(candidate_leng), 36, 2054), dtype=np.float32) #YZ
+        candidate_obj_mask = np.zeros((len(obs), max(candidate_leng), 36), dtype=np.float32) #YZ
         # Note: The candidate_feat at len(ob['candidate']) is the feature for the END
         # which is zero in my implementation
         for i, ob in enumerate(obs):
             for j, cc in enumerate(ob['candidate']):
                 candidate_feat[i, j, :] = cc['feature']
+                candidate_obj_feat[i, j, :] = cc['obj_feat'] #YZ
+                candidate_obj_mask[i, j, :] = cc['obj_mask'] #YZ
 
-        return torch.from_numpy(candidate_feat).cuda(), candidate_leng
+        #return torch.from_numpy(candidate_feat).cuda(), candidate_leng
+        return torch.from_numpy(candidate_feat).cuda(), candidate_leng, torch.from_numpy(candidate_obj_feat).cuda(), torch.from_numpy(candidate_obj_mask).cuda() #YZ
 
     def get_input_feat(self, obs):
         input_a_t = np.zeros((len(obs), args.angle_feat_size), np.float32)
@@ -163,9 +170,9 @@ class Seq2SeqAgent(BaseAgent):
             input_a_t[i] = utils.angle_feature(ob['heading'], ob['elevation'])
         input_a_t = torch.from_numpy(input_a_t).cuda()
         # f_t = self._feature_variable(obs)      # Pano image features from obs
-        candidate_feat, candidate_leng = self._candidate_variable(obs)
+        candidate_feat, candidate_leng, candidate_obj_feat, candidate_obj_mask = self._candidate_variable(obs) #YZ
 
-        return input_a_t, candidate_feat, candidate_leng
+        return input_a_t, candidate_feat, candidate_leng, candidate_obj_feat, candidate_obj_mask #YZ
 
     def _teacher_action(self, obs, ended):
         """
@@ -287,7 +294,7 @@ class Seq2SeqAgent(BaseAgent):
 
         for t in range(self.episode_len):
 
-            input_a_t, candidate_feat, candidate_leng = self.get_input_feat(perm_obs)
+            input_a_t, candidate_feat, candidate_leng, candidate_obj_feat, candidate_obj_mask = self.get_input_feat(perm_obs) #YZ   
 
             # the first [CLS] token, initialized by the language BERT, serves
             # as the agent's state passing through time steps
@@ -295,7 +302,10 @@ class Seq2SeqAgent(BaseAgent):
                 language_features = torch.cat((h_t.unsqueeze(1), language_features[:,1:,:]), dim=1)
 
             visual_temp_mask = (utils.length2mask(candidate_leng) == 0).long()
-            visual_attention_mask = torch.cat((language_attention_mask, visual_temp_mask), dim=-1)
+            tmp_obj_mask = ((visual_temp_mask.unsqueeze(-1).repeat(1,1,36)+candidate_obj_mask) > 0).long() #YZ
+            tmp_obj_mask = tmp_obj_mask.view(batch_size, -1)
+            visual_attention_mask = torch.cat((language_attention_mask, tmp_obj_mask), dim=-1)#YZ
+            #visual_attention_mask = torch.cat((language_attention_mask, visual_temp_mask), dim=-1)#YZ
 
             self.vln_bert.vln_bert.config.directions = max(candidate_leng)
             ''' Visual BERT '''
@@ -307,8 +317,20 @@ class Seq2SeqAgent(BaseAgent):
                             'token_type_ids':     token_type_ids,
                             'action_feats':       input_a_t,
                             # 'pano_feats':         f_t,
-                            'cand_feats':         candidate_feat}
+                            'cand_feats':         candidate_feat,
+                            'cand_obj_feats':    candidate_obj_feat}
             h_t, logit = self.vln_bert(**visual_inputs)
+
+            # YZ: Obtain the language token probability
+            '''
+            for ob_id, each_ob in enumerate(perm_obs):
+                #language_prob[ob_id]
+                sort_index = torch.sort(language_prob.detach().cpu()[ob_id], descending=True, stable=True)[1] 
+                sort_instr = self.tok.convert_ids_to_tokens(torch.tensor(each_ob['instr_encoding'])[1:][sort_index].tolist())
+                self.sort_tokens[each_ob['instr_id']+"_"+str(t)] = {}
+                self.sort_tokens[each_ob['instr_id']+"_"+str(t)]["sort_instr"] = sort_instr
+                self.sort_tokens[each_ob['instr_id']+"_"+str(t)]["start_view"] = each_ob['viewpoint']
+            '''
             hidden_states.append(h_t)
 
             # Mask outputs where agent can't move forward
@@ -348,8 +370,14 @@ class Seq2SeqAgent(BaseAgent):
             # Make action and get the new state
             self.make_equiv_action(cpu_a_t, perm_obs, perm_idx, traj)
             obs = np.array(self.env._get_obs())
-            perm_obs = obs[perm_idx]            # Perm the obs for the resu
+            perm_obs = obs[perm_idx]            # Perm the obs for the reues
 
+            # YZ: Obtain the predict end viewpoint
+            '''
+            for ob_id, each_ob in enumerate(perm_obs):
+                #language_prob[ob_id]
+                self.sort_tokens[each_ob['instr_id']+"_"+str(t)]["end_view"] = each_ob['viewpoint']
+            '''
             if train_rl:
                 # Calculate the mask and reward
                 dist = np.zeros(batch_size, np.float32)

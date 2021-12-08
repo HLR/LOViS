@@ -20,7 +20,7 @@ from tensorboardX import SummaryWriter
 
 from vlnbert.vlnbert_init import get_tokenizer
 
-log_dir = 'snap/%s' % args.name
+log_dir = '/home/joslin/Recurrent-VLN-BERT/snap/%s' % args.name
 if not os.path.exists(log_dir):
     os.makedirs(log_dir)
 
@@ -175,12 +175,21 @@ def valid(train_env, tok, val_envs={}):
                 loss_str += ', %s: %.4f' % (metric, val)
             print(loss_str)
 
-        if args.submit:
+        # if args.submit:
             json.dump(
                 result,
                 open(os.path.join(log_dir, "submit_%s.json" % env_name), 'w'),
                 sort_keys=True, indent=4, separators=(',', ': ')
             )
+        
+        # YZ: print the sorrted tokens
+        '''
+            json.dump(
+                agent.sort_tokens,
+                open(os.path.join(log_dir, "instr_%s.json" % env_name), 'w'),
+                sort_keys=True, indent=4, separators=(',', ': ')
+            )
+        '''
 
 def setup():
     torch.manual_seed(1)

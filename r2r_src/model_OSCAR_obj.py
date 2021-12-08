@@ -2,18 +2,15 @@
 
 import torch
 import torch.nn as nn
-from torch.autograd import Variable
-import torch.nn.functional as F
-from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from param import args
 
 from vlnbert.vlnbert_init import get_vlnbert_models
+
 
 class VLNBERT(nn.Module):
     def __init__(self, feature_size=2048+128):
         super(VLNBERT, self).__init__()
         print('\nInitalizing the VLN-BERT model ...')
-
         self.vln_bert = get_vlnbert_models(args, config=None)  # initialize the VLN-BERT
         self.vln_bert.config.directions = 4  # a preset random number
 
@@ -28,18 +25,15 @@ class VLNBERT(nn.Module):
         self.img_projection = nn.Linear(feature_size, hidden_size, bias=True)
         self.cand_LayerNorm = BertLayerNorm(hidden_size, eps=layer_norm_eps)
 
-        self.vis_lang_LayerNorm = BertLayerNorm(hidden_size, eps=layer_norm_eps)
-        self.state_proj = nn.Linear(hidden_size*2, hidden_size, bias=True)
-        self.state_LayerNorm = BertLayerNorm(hidden_size, eps=layer_norm_eps)
-
     def forward(self, mode, sentence, token_type_ids=None,
                 attention_mask=None, lang_mask=None, vis_mask=None,
-                position_ids=None, action_feats=None, pano_feats=None, cand_feats=None):
+                position_ids=None, action_feats=None, pano_feats=None, cand_feats=None, cand_obj_feats=None):
 
         if mode == 'language':
-            init_state, encoded_sentence = self.vln_bert(mode, sentence, attention_mask=attention_mask, lang_mask=lang_mask,)
+            encoded_sentence = self.vln_bert(mode, sentence, position_ids=position_ids,
+                        token_type_ids=token_type_ids, attention_mask=attention_mask)
 
-            return init_state, encoded_sentence
+            return encoded_sentence
 
         elif mode == 'visual':
 
@@ -50,17 +44,14 @@ class VLNBERT(nn.Module):
 
             cand_feats[..., :-args.angle_feat_size] = self.drop_env(cand_feats[..., :-args.angle_feat_size])
 
+            # cand_feats_embed = self.img_projection(cand_feats)  # [2176 * 768] projection
+            # cand_feats_embed = self.cand_LayerNorm(cand_feats_embed)
+
             # logit is the attention scores over the candidate features
-            h_t, logit, attended_language, attended_visual, language_prob = self.vln_bert(mode, state_feats,
-                attention_mask=attention_mask, lang_mask=lang_mask, vis_mask=vis_mask, img_feats=cand_feats)
+            h_t, logit = self.vln_bert(mode, state_feats,
+                        attention_mask=attention_mask, img_feats=cand_obj_feats)
 
-            # update agent's state, unify history, language and vision by elementwise product
-            vis_lang_feat = self.vis_lang_LayerNorm(attended_language * attended_visual)
-            state_output = torch.cat((h_t, vis_lang_feat), dim=-1)
-            state_proj = self.state_proj(state_output)
-            state_proj = self.state_LayerNorm(state_proj)
-
-            return state_proj, logit, language_prob
+            return h_t, logit
 
         else:
             ModuleNotFoundError

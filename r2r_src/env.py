@@ -129,7 +129,7 @@ class R2RBatch():
                             instr_tokens = tokenizer.tokenize(instr)
                             padded_instr_tokens, num_words = pad_instr_tokens(instr_tokens, args.maxInput)
                             new_item['instr_encoding'] = tokenizer.convert_tokens_to_ids(padded_instr_tokens)
-
+                            
                             if new_item['instr_encoding'] is not None:  # Filter the wrong data
                                 self.data.append(new_item)
                                 scans.append(item['scan'])
@@ -264,7 +264,9 @@ class R2RBatch():
                             'pointId': ix,
                             'distance': distance,
                             'idx': j + 1,
-                            'feature': np.concatenate((visual_feat, angle_feat), -1)
+                            'feature': np.concatenate((visual_feat, angle_feat), -1),
+                            'obj_feat': np.zeros((36, 2054)), #YZ
+                            'obj_mask': np.ones(36) #YZ
                         }
             candidate = list(adj_dict.values())
             self.buffered_state_dict[long_id] = [
@@ -287,6 +289,8 @@ class R2RBatch():
                 c_new['heading'] = loc_heading
                 angle_feat = utils.angle_feature(c_new['heading'], c_new['elevation'])
                 c_new['feature'] = np.concatenate((visual_feat, angle_feat), -1)
+                c_new['obj_feat'] = np.zeros((36, 2054)) #YZ
+                c_new['obj_mask'] = np.ones(36)
                 c_new.pop('normalized_heading')
                 candidate_new.append(c_new)
             return candidate_new

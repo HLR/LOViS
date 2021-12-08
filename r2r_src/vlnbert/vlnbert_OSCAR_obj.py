@@ -9,6 +9,8 @@ from torch import nn
 import torch.nn.functional as F
 from torch.nn import CrossEntropyLoss, MSELoss
 
+import sys
+sys.path.append("/home/joslin/Recurrent-VLN-BERT/")
 from transformers.pytorch_transformers.modeling_bert import (BertEmbeddings,
         BertSelfAttention, BertAttention, BertEncoder, BertLayer,
         BertSelfOutput, BertIntermediate, BertOutput,
@@ -38,7 +40,7 @@ class CaptionBertSelfAttention(BertSelfAttention):
             mixed_value_layer = self.value(hidden_states)
 
         if mode == 'visual':
-            mixed_query_layer = mixed_query_layer[:, [0]+list(range(-self.config.directions, 0)), :]
+            mixed_query_layer = mixed_query_layer[:, [0]+list(range(-self.config.directions*36, 0)), :]
 
         ''' language feature only provide Keys and Values '''
         query_layer = self.transpose_for_scores(mixed_query_layer)
@@ -89,7 +91,7 @@ class CaptionBertAttention(BertAttention):
 
         ''' feed-forward network with residule '''
         if mode == 'visual':
-            attention_output = self.output(self_outputs[0], input_tensor[:, [0]+list(range(-self.config.directions, 0)), :])
+            attention_output = self.output(self_outputs[0], input_tensor[:, [0]+list(range(-self.config.directions*36, 0)), :])
         if mode == 'language':
             attention_output = self.output(self_outputs[0], input_tensor)
 
@@ -146,7 +148,7 @@ class CaptionBertEncoder(BertEncoder):
                         hidden_states, attention_mask, head_mask[i],
                         history_state)
 
-                concat_layer_outputs = torch.cat((layer_outputs[0][:,0:1,:], hidden_states[:,1:-self.config.directions,:], layer_outputs[0][:,1:self.config.directions+1,:]), 1)
+                concat_layer_outputs = torch.cat((layer_outputs[0][:,0:1,:], hidden_states[:,1:-self.config.directions*36,:], layer_outputs[0][:,1:self.config.directions*36+1,:]), 1)
                 hidden_states = concat_layer_outputs
 
                 if i == self.config.num_hidden_layers - 1:
@@ -183,8 +185,9 @@ class BertImgModel(BertPreTrainedModel):
         self.pooler = BertPooler(config)
 
         self.img_dim = config.img_feature_dim
+        self.image_embeding = nn.Linear(self.img_dim, config.hidden_size, bias=True)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
         logger.info('BertImgModel Image Dimension: {}'.format(self.img_dim))
-
         self.apply(self.init_weights)
 
     def forward(self, mode, input_ids, token_type_ids=None, attention_mask=None,
@@ -202,7 +205,8 @@ class BertImgModel(BertPreTrainedModel):
 
         head_mask = [None] * self.config.num_hidden_layers
 
-        if mode == 'visual':
+        ### YZ: TODO whether layernorm?
+        if mode == 'visual': 
             language_features = input_ids
             concat_embedding_output = torch.cat((language_features, img_feats), 1)
         elif mode == 'language':
@@ -230,6 +234,7 @@ class VLNBert(BertPreTrainedModel):
     def __init__(self, config):
         super(VLNBert, self).__init__(config)
         self.config = config
+                                                  
         self.bert = BertImgModel(config)
 
         self.vis_lang_LayerNorm = BertLayerNorm(config.hidden_size, eps=config.layer_norm_eps)
@@ -241,6 +246,10 @@ class VLNBert(BertPreTrainedModel):
 
     def forward(self, mode, input_ids, token_type_ids=None, attention_mask=None,
                 position_ids=None, img_feats=None):
+        if mode == "visual":
+            img_feats = self.bert.image_embeding(img_feats)
+            img_feats = self.bert.dropout(img_feats)
+            img_feats = img_feats.view(input_ids.shape[0], -1, self.config.hidden_size)
 
         outputs = self.bert(mode, input_ids, position_ids=position_ids, token_type_ids=token_type_ids,
                         attention_mask=attention_mask, img_feats=img_feats)
@@ -255,8 +264,8 @@ class VLNBert(BertPreTrainedModel):
 
         elif mode == 'visual':
             # attention scores with respect to agent's state
-            language_attentions = outputs[2][:, :, 1:-self.config.directions]
-            visual_attentions = outputs[2][:, :, -self.config.directions:]
+            language_attentions = outputs[2][:, :, 1:-self.config.directions*36]
+            visual_attentions = outputs[2][:, :, -self.config.directions*36:]
 
             language_attention_scores = language_attentions.mean(dim=1)  # mean over the 12 heads
             visual_attention_scores = visual_attentions.mean(dim=1)
@@ -265,8 +274,8 @@ class VLNBert(BertPreTrainedModel):
             language_attention_probs = nn.Softmax(dim=-1)(language_attention_scores.clone()).unsqueeze(-1)
             visual_attention_probs = nn.Softmax(dim=-1)(visual_attention_scores.clone()).unsqueeze(-1)
 
-            language_seq = sequence_output[:, 1:-self.config.directions, :]
-            visual_seq = sequence_output[:, -self.config.directions:, :]
+            # language_seq = sequence_output[:, 1:-self.config.directions, :]
+            # visual_seq = sequence_output[:, -self.config.directions:, :]
 
             # residual weighting, final attention to weight the raw inputs
             attended_language = (language_attention_probs * input_ids[:, 1:, :]).sum(1)
@@ -278,4 +287,6 @@ class VLNBert(BertPreTrainedModel):
             state_proj = self.state_proj(state_output)
             state_proj = self.state_LayerNorm(state_proj)
 
-            return state_proj, visual_attention_scores
+            visual_attention_obj = torch.max(visual_attention_scores.view(-1, self.config.directions, 36),-1)[0]
+
+            return state_proj, visual_attention_obj
