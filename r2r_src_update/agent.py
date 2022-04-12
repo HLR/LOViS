@@ -328,33 +328,6 @@ class Seq2SeqAgent(BaseAgent):
                             }
             h_t, logit  = self.vln_bert(**visual_inputs)
 
-
-            # YZ: Obtain the language token probability
-            '''
-            for ob_id, each_ob in enumerate(perm_obs):
-                #language_prob[ob_id]
-                sort_index = torch.sort(language_prob.detach().cpu()[ob_id], descending=True, stable=True)[1] 
-                sort_instr = self.tok.convert_ids_to_tokens(torch.tensor(each_ob['instr_encoding'])[1:][sort_index].tolist())
-                self.sort_tokens[each_ob['instr_id']+"_"+str(t)] = {}
-                self.sort_tokens[each_ob['instr_id']+"_"+str(t)]["sort_instr"] = sort_instr
-                self.sort_tokens[each_ob['instr_id']+"_"+str(t)]["start_view"] = each_ob['viewpoint']
-            '''
-            # YZ:heatmap
-            '''
-            if t==2:
-                for ob_id, each_ob in enumerate(perm_obs):
-                    self.atten_heat[each_ob['instr_id']+"_"] = {}
-                    self.atten_heat[each_ob['instr_id']+"_"]['img'] = visul_head_prob[ob_id].detach().cpu()
-                    self.atten_heat[each_ob['instr_id']+"_"]['lang'] = lang_head_prob[ob_id].detach().cpu()
-            '''
-            '''
-            if t == 0:
-                for ob_id, each_ob in enumerate(perm_obs):
-                    self.obj_token_attn[each_ob['instr_id']] = {}
-                    self.obj_token_attn[each_ob['instr_id']]['obj_token'] = all_prob[ob_id][:(candidate_leng[ob_id]-1)].detach().cpu().numpy()
-                    self.obj_token_attn[each_ob['instr_id']]["start_view"] = each_ob['scan']+"_"+each_ob['viewpoint']
-                    self.obj_token_attn[each_ob['instr_id']]['instr'] = self.tok.convert_ids_to_tokens(torch.tensor(each_ob['instr_encoding'])[1:].tolist())
-            '''
             hidden_states.append(h_t)
 
             # Mask outputs where agent can't move forward

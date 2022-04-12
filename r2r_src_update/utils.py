@@ -279,6 +279,8 @@ def read_img_features(feature_store, test_only=False):
     print("Finish Loading the image feature from %s in %0.4f seconds" % (feature_store, time.time() - start))
     return features
 
+def roi_img_features(feature_store):
+    return np.load(feature_store, allow_pickle=True).item()
     
 
 def read_candidates(candidates_store):

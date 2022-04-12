@@ -7,7 +7,7 @@ import random
 import numpy as np
 from collections import defaultdict
 
-from utils import read_vocab, write_vocab, build_vocab, padding_idx, timeSince, read_img_features, print_progress
+from utils import read_vocab, write_vocab, build_vocab, padding_idx, timeSince, read_img_features, print_progress, roi_img_features
 import utils
 from env import R2RBatch
 from agent import Seq2SeqAgent
@@ -26,6 +26,7 @@ if not os.path.exists(log_dir):
 
 IMAGENET_FEATURES = 'img_features/ResNet-152-imagenet.tsv'
 PLACE365_FEATURES = '/home/hlr/shared/data/joslin/img_features/ResNet-152-places365.tsv'
+#PLACE365_FEATURES = '/home/hlr/shared/data/joslin/img_features/CLIP-ViT-B-32-views.tsv'
 result_path = "/home/joslin/Recurrent-VLN-BERT/result/"
 experiment_time = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
 
@@ -190,7 +191,11 @@ def valid(train_env, tok, val_envs={}):
                     sort_keys=True, indent=4, separators=(',', ': ')
                 )
             '''
-   
+            # YZ: output the heatmap of transformer attention
+    #np.save("/VL/space/zhan1624/Recurrent-VLN-BERT/attent_heatmap/mean/third_steps.npy", agent.atten_heat, allow_pickle=True)
+        # if env_name == "val_seen":
+        #     np.save("/VL/space/zhan1624/Recurrent-VLN-BERT/attent_heatmap/all/first_step_original.npy", agent.obj_token_attn, allow_pickle=True)
+        
 
 def setup():
     torch.manual_seed(1)
@@ -204,6 +209,7 @@ def train_val(test_only=False):
     tok = get_tokenizer(args)
 
     feat_dict = read_img_features(features, test_only=test_only)
+   
     if args.using_obj:
         obj_dict = np.load(args.obj_img_feat_path, allow_pickle=True).item()
     else:

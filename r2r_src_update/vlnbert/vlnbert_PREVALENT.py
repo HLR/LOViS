@@ -2,7 +2,6 @@
 # Modified in Recurrent VLN-BERT, 2020, Yicong.Hong@anu.edu.au
 
 from __future__ import absolute_import, division, print_function, unicode_literals
-from heapq import merge
 
 import json
 import logging
@@ -303,25 +302,22 @@ class LXRTXLayer(nn.Module):
         self.visn_output = BertOutput(config)
         # The cross attention layer
         self.visual_attention = BertXAttention(config)
-        # The fully connect layer
-        self.fc_new = nn.Linear(2*config.hidden_size, config.hidden_size)
+        # The soft attention
+        self.softattn = SoftDotAttention(config.hidden_size, config.hidden_size)
+        # YZ fully connect layer
+        self.fc_new = nn.Linear(3*config.hidden_size, config.hidden_size)
         self.LayerNorm_new = BertLayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout_new = nn.Dropout(config.hidden_dropout_prob)
 
     def cross_att1(self, lang_input, lang_attention_mask, visn_input, visn_attention_mask):
         ''' Cross Attention -- cross for vision not for language '''
-        # YZ
-        lang_att_output, lan_attention_scores = self.visual_attention(lang_input, visn_input, ctx_att_mask=visn_attention_mask)
-        return lang_att_output, lan_attention_scores
+        visn_att_output, attention_scores = self.visual_attention(visn_input, lang_input, ctx_att_mask=lang_attention_mask)
+        return visn_att_output, attention_scores
 
     def cross_att2(self, lang_input, lang_attention_mask, visn_input, visn_attention_mask):
         ''' Cross Attention -- cross for vision not for language '''
-        visn_att_output, vis_attention_scores = self.visual_attention(visn_input, lang_input, ctx_att_mask=lang_attention_mask)
-        
-        return visn_att_output, vis_attention_scores
-        # YZ
-        #lang_att_output, attention_scores = self.visual_attention(lang_input, visn_input, ctx_att_mask=visn_attention_mask)
-        #return lang_att_output, attention_scores
+        lang_att_output, lan_attention_scores = self.visual_attention(lang_input, visn_input, ctx_att_mask=visn_attention_mask)
+        return lang_att_output, lan_attention_scores
 
     def self_att(self, visn_input, visn_attention_mask):
         ''' Self Attention -- on visual features with language clues '''
@@ -335,49 +331,84 @@ class LXRTXLayer(nn.Module):
         return visn_output
 
     def forward(self, lang_feats, lang_attention_mask,
-                      visn_feats, visn_attention_mask, tdx):
+                      visn_feats, visn_attention_mask, tdx, only_visn_feats=None, pos_feats=None):
     
         ''' visual self-attention with state '''
         
-
-        visn_att_output = visn_feats
-        state_vis_mask = visn_attention_mask
-
+        prev_h = lang_feats[:, 0:1, :].squeeze(1)
         # ''' state and vision attend to language'''
-        lang_att_output, lan_cross_attention_scores = self.cross_att1(lang_feats, lang_attention_mask, visn_att_output, state_vis_mask)
 
-
-        visn_att_output = torch.cat((lang_feats[:, 0:1, :], visn_feats), dim=1)
-        state_vis_mask = torch.cat((lang_attention_mask[:,:,:,0:1], visn_attention_mask), dim=-1)
-        visn_att_output, vis_cross_attention_scores = self.cross_att2(lang_feats[:, 1:, :], lang_attention_mask[:, :, :, 1:], visn_att_output, state_vis_mask)
+        ### pos
+        lang_pos_feats = self.softattn(prev_h, lang_feats, lang_attention_mask)
+        pos_att_output = torch.cat((lang_pos_feats[0].unsqueeze(1),lang_feats[:, 1:, :]), dim=1)
+        cls_pos, _ = self.cross_att2(pos_att_output, lang_attention_mask, pos_feats, visn_attention_mask)
         
-        state_lang_att_output = self.self_att(lang_att_output, lang_attention_mask) #[0]4*80*768 [1]4*12*80*80
-        state_visn_att_output = self.self_att(visn_att_output, state_vis_mask)#[0]4*5*768 [1]4*12*5*5
-        state_lang_output = self.output_fc(state_lang_att_output[0])
-        state_visn_output = self.output_fc(state_visn_att_output[0])
+        ### vision
+        lang_obj_feats = self.softattn(prev_h, lang_feats, lang_attention_mask)
+        visn_att_output = torch.cat((lang_obj_feats[0].unsqueeze(1), lang_feats[:, 1:, :]), dim=1)
+        cls_visn, _ = self.cross_att2(visn_att_output, lang_attention_mask, only_visn_feats, visn_attention_mask)
 
-        lang_att_output = state_lang_output[:, 1:, :]
-        visn_att_output = state_visn_output[:, 1:, :]
-        # GX: self.fc ==> wx + b range of output is not limited.
-        # GX: merge_head should be consistent with state_visn_output, w.r.t output value range.
-        merge_head = self.fc_new(torch.cat([state_lang_output[:, 0:1, :], state_visn_output[:, 0:1, :]], dim=-1))
+        ### history
+        state_vis_mask = torch.cat((lang_attention_mask[:,:,:,0:1], visn_attention_mask), dim=-1)
+        his_visn_att_output = torch.cat((lang_feats[:, 0:1, :], visn_feats), dim=1)
+        cls_his, cross_attention_scores = self.cross_att1(lang_feats[:, 1:, :], lang_attention_mask[:, :, :, 1:], his_visn_att_output, state_vis_mask)
+        language_attention_scores = cross_attention_scores[:, :, 0, :]
+
+        ### merge head
+        merge_head = self.fc_new(torch.cat([cls_pos[:,0:1,:], cls_visn[:,0:1,:], cls_his[:,0:1,:]], dim=-1))
         merge_head = self.dropout_new(merge_head)
         merge_head = self.LayerNorm_new(merge_head)
         merge_head = self.output_fc(merge_head)
 
-        lang_att_output = torch.cat((merge_head, lang_feats[:,1:,:]), dim=1)
+        ### action
+        state_visn_att_output = self.self_att(torch.cat((merge_head, visn_feats), dim=1), state_vis_mask)
+        state_visn_output = self.output_fc(state_visn_att_output[0])
+        visn_att_output = state_visn_output[:, 1:, :]
+        lang_att_output = torch.cat((state_visn_output[:, 0:1, :], lang_feats[:,1:,:]), dim=1)
 
-        language_attention_scores = vis_cross_attention_scores[:, :, 0, :]
-        visual_attention_scores = lan_cross_attention_scores[:, :, 0, :]
+        visual_attention_scores = state_visn_att_output[1][:, :, 0, 1:]
 
-        # update cls with merged head and concat with image feature
-        
-        new_state_visn_att_output = self.self_att(torch.cat((merge_head, visn_att_output), dim=1), state_vis_mask)
-        action_emb = new_state_visn_att_output[1][:,:,0,1:]
+        return lang_att_output, visn_att_output, language_attention_scores, visual_attention_scores
 
-        return lang_att_output, visn_att_output, language_attention_scores, visual_attention_scores, action_emb
 
-        
+class SoftDotAttention(nn.Module):
+    '''Soft Dot Attention. 
+    Ref: http://www.aclweb.org/anthology/D15-1166
+    Adapted from PyTorch OPEN NMT.
+    '''
+
+    def __init__(self, query_dim, ctx_dim):
+        '''Initialize layer.'''
+        super(SoftDotAttention, self).__init__()
+        self.linear_in = nn.Linear(query_dim, ctx_dim, bias=False)
+        self.sm = nn.Softmax()
+        self.linear_out = nn.Linear(query_dim + ctx_dim, query_dim, bias=False)
+        self.tanh = nn.Tanh()
+
+    def forward(self, h, context, mask=None,
+                output_tilde=True, output_prob=True):
+        '''Propagate h through the network.
+        h: batch x dim
+        context: batch x seq_len x dim
+        mask: batch x seq_len indices to be masked
+        '''
+        target = self.linear_in(h).unsqueeze(2)  # batch x dim x 1
+
+        # Get attention
+        attn = torch.bmm(context, target).squeeze(2)  # batch x seq_len
+        logit = attn
+
+        if mask is not None:
+            # -Inf masking prior to the softmax
+            mask = mask.squeeze(1).squeeze(1)
+        attn = self.sm(attn)    # There will be a bug here, but it's actually a problem in torch source code.
+        attn3 = attn.view(attn.size(0), 1, attn.size(1))  # batch x 1 x seq_len
+
+        weighted_context = torch.bmm(attn3, context).squeeze(1)  # batch x dim
+        return weighted_context, attn
+
+
+
 class VisionEncoder(nn.Module):
     def __init__(self, vision_size, config):
         super().__init__()
@@ -398,6 +429,31 @@ class VisionEncoder(nn.Module):
         output = self.dropout(x)
         return output
 
+class PositionEncoder(nn.Module):
+    def __init__(self, vision_size, config):
+        super().__init__()
+        feat_dim = vision_size
+        #pos_dim = VISUAL_CONFIG.visual_pos_dim
+
+        # Object feature encoding
+        self.pos_fc = nn.Linear(feat_dim, config.hidden_size)
+        self.pos_layer_norm = BertLayerNorm(config.hidden_size, eps=1e-12)
+
+        # Box position encoding
+        #self.box_fc = nn.Linear(pos_dim, config.hidden_size)
+        #self.box_layer_norm = BertLayerNorm(config.hidden_size, eps=1e-12)
+
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+
+    def forward(self, visn_input):
+        #feats, boxes = visn_input
+        feats = visn_input
+
+        x = self.pos_fc(feats)
+        x = self.pos_layer_norm(x)
+        output = self.dropout(x)
+        return output
+
 
 class VLNBert(BertPreTrainedModel):
     def __init__(self, config):
@@ -415,6 +471,8 @@ class VLNBert(BertPreTrainedModel):
         self.addlayer = nn.ModuleList(
             [LXRTXLayer(config) for _ in range(self.vl_layers)])
         self.vision_encoder = VisionEncoder(self.config.img_feature_dim, self.config)
+        self.only_vision_encoder = VisionEncoder(self.config.img_visn_dim, self.config)
+        self.pos_encoder = PositionEncoder(self.config.img_pos_dim, self.config)
         #self.apply(self.init_weights)
         self.init_weights()
 
@@ -453,7 +511,12 @@ class VLNBert(BertPreTrainedModel):
 
             text_mask = extended_attention_mask
 
+            
+            visn_feats, pos_feats = img_feats[:,:,:self.config.img_visn_dim], img_feats[:,:,self.config.img_visn_dim:]
             img_embedding_output = self.vision_encoder(img_feats)
+            only_vision_output = self.only_vision_encoder(visn_feats)
+            pos_output = self.pos_encoder(pos_feats)
+
             img_seq_len = img_feats.shape[1]
             batch_size = text_embeds.size(0)
 
@@ -466,17 +529,20 @@ class VLNBert(BertPreTrainedModel):
 
             lang_output = text_embeds
             visn_output = img_embedding_output
+            only_visn_feats = only_vision_output
+            pos_feats = pos_output
             
            
             for tdx, layer_module in enumerate(self.addlayer):
-                lang_output, visn_output, language_attention_scores, visual_attention_scores, action_emb = layer_module(lang_output, text_mask, visn_output, img_mask, tdx)
+                lang_output, visn_output, language_attention_scores, \
+                visual_attention_scores = layer_module(lang_output, text_mask, visn_output, img_mask, tdx, 
+                                                       only_visn_feats, pos_feats)
                
             sequence_output = lang_output
             pooled_output = self.pooler(sequence_output)
 
             language_state_scores = language_attention_scores.mean(dim=1)
             visual_action_scores = visual_attention_scores.mean(dim=1)
-            action_emb = action_emb.mean(dim=1)
 
             # weighted_feat
             language_attention_probs = nn.Softmax(dim=-1)(language_state_scores.clone()).unsqueeze(-1)
@@ -485,5 +551,4 @@ class VLNBert(BertPreTrainedModel):
             attended_language = (language_attention_probs * text_embeds[:, 1:, :]).sum(1)
             attended_visual = (visual_attention_probs * img_embedding_output).sum(1)
 
-            return pooled_output, action_emb, attended_language, attended_visual
-
+            return pooled_output, visual_action_scores, attended_language, attended_visual, language_attention_probs.squeeze(-1)
