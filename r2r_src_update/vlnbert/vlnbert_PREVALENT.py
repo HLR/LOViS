@@ -338,6 +338,12 @@ class LXRTXLayer(nn.Module):
         prev_h = lang_feats[:, 0:1, :].squeeze(1)
         # ''' state and vision attend to language'''
 
+        ### history
+        state_vis_mask = torch.cat((lang_attention_mask[:,:,:,0:1], visn_attention_mask), dim=-1)
+        his_visn_att_output = torch.cat((lang_feats[:, 0:1, :], visn_feats), dim=1)
+        cls_his, cross_attention_scores = self.cross_att1(lang_feats[:, 1:, :], lang_attention_mask[:, :, :, 1:], his_visn_att_output, state_vis_mask)
+        language_attention_scores = cross_attention_scores[:, :, 0, :]
+
         ### pos
         lang_pos_feats = self.softattn(prev_h, lang_feats, lang_attention_mask)
         pos_att_output = torch.cat((lang_pos_feats[0].unsqueeze(1),lang_feats[:, 1:, :]), dim=1)
@@ -347,13 +353,7 @@ class LXRTXLayer(nn.Module):
         lang_obj_feats = self.softattn(prev_h, lang_feats, lang_attention_mask)
         visn_att_output = torch.cat((lang_obj_feats[0].unsqueeze(1), lang_feats[:, 1:, :]), dim=1)
         cls_visn, _ = self.cross_att2(visn_att_output, lang_attention_mask, only_visn_feats, visn_attention_mask)
-
-        ### history
-        state_vis_mask = torch.cat((lang_attention_mask[:,:,:,0:1], visn_attention_mask), dim=-1)
-        his_visn_att_output = torch.cat((lang_feats[:, 0:1, :], visn_feats), dim=1)
-        cls_his, cross_attention_scores = self.cross_att1(lang_feats[:, 1:, :], lang_attention_mask[:, :, :, 1:], his_visn_att_output, state_vis_mask)
-        language_attention_scores = cross_attention_scores[:, :, 0, :]
-
+ 
         ### merge head
         merge_head = self.fc_new(torch.cat([cls_pos[:,0:1,:], cls_visn[:,0:1,:], cls_his[:,0:1,:]], dim=-1))
         merge_head = self.dropout_new(merge_head)
@@ -454,6 +454,30 @@ class PositionEncoder(nn.Module):
         output = self.dropout(x)
         return output
 
+class OnlyImgEncoder(nn.Module):
+    def __init__(self, vision_size, config):
+        super().__init__()
+        feat_dim = vision_size
+        #pos_dim = VISUAL_CONFIG.visual_pos_dim
+
+        # Object feature encoding
+        self.onlyimg_fc = nn.Linear(feat_dim, config.hidden_size)
+        self.onlyimg_layer_norm = BertLayerNorm(config.hidden_size, eps=1e-12)
+
+        # Box position encoding
+        #self.box_fc = nn.Linear(pos_dim, config.hidden_size)
+        #self.box_layer_norm = BertLayerNorm(config.hidden_size, eps=1e-12)
+
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+
+    def forward(self, visn_input):
+        #feats, boxes = visn_input
+        feats = visn_input
+
+        x = self.onlyimg_fc(feats)
+        x = self.onlyimg_layer_norm(x)
+        output = self.dropout(x)
+        return output
 
 class VLNBert(BertPreTrainedModel):
     def __init__(self, config):
@@ -471,8 +495,9 @@ class VLNBert(BertPreTrainedModel):
         self.addlayer = nn.ModuleList(
             [LXRTXLayer(config) for _ in range(self.vl_layers)])
         self.vision_encoder = VisionEncoder(self.config.img_feature_dim, self.config)
-        self.only_vision_encoder = VisionEncoder(self.config.img_visn_dim, self.config)
+        self.only_vision_encoder = OnlyImgEncoder(self.config.img_visn_dim, self.config)
         self.pos_encoder = PositionEncoder(self.config.img_pos_dim, self.config)
+
         #self.apply(self.init_weights)
         self.init_weights()
 
