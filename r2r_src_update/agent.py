@@ -105,6 +105,7 @@ class Seq2SeqAgent(BaseAgent):
         elif args.vlnbert == 'prevalent':
             self.vln_bert = model_PREVALENT.VLNBERT(feature_size=self.feature_size + args.angle_feat_size).cuda()
             self.critic = model_PREVALENT.Critic().cuda()
+        
         self.models = (self.vln_bert, self.critic)
 
         # Optimizers
@@ -164,8 +165,6 @@ class Seq2SeqAgent(BaseAgent):
                 #candidate_obj_feat[i, j, :] = cc['obj_feat'] #YZ
                 #candidate_obj_mask[i, j, :] = cc['obj_mask'] #YZ
 
-        #return torch.from_numpy(candidate_feat).cuda(), candidate_leng
-        #return torch.from_numpy(candidate_feat).cuda(), candidate_leng, torch.from_numpy(candidate_obj_feat).cuda(), torch.from_numpy(candidate_obj_mask).cuda() #YZ
         return torch.from_numpy(candidate_feat).cuda(), candidate_leng
 
     def get_input_feat(self, obs):
@@ -283,9 +282,12 @@ class Seq2SeqAgent(BaseAgent):
         last_dist = np.zeros(batch_size, np.float32)
         last_ndtw = np.zeros(batch_size, np.float32)
         for i, ob in enumerate(perm_obs):   # The init distance from the view point to the target
+            if ob['instr_id'] == "7283_0":
+                print('yue')
             last_dist[i] = ob['distance']
             path_act = [vp[0] for vp in traj[i]['path']]
-            last_ndtw[i] = self.ndtw_criterion[ob['scan']](path_act, ob['gt_path'], metric='ndtw')
+            if not args.submit:
+                last_ndtw[i] = self.ndtw_criterion[ob['scan']](path_act, ob['gt_path'], metric='ndtw')
 
         # Initialization the tracking state
         ended = np.array([False] * batch_size)  # Indices match permuation of the model, not env
@@ -325,6 +327,7 @@ class Seq2SeqAgent(BaseAgent):
                             'action_feats':       input_a_t,
                             # 'pano_feats':         f_t,
                             'cand_feats':         candidate_feat,
+                            'initial_text': language_features[:,0,:]
                             }
             h_t, logit  = self.vln_bert(**visual_inputs)
 

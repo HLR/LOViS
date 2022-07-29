@@ -1,6 +1,5 @@
-import torch
-
 import os
+import torch
 import time
 import json
 import random
@@ -19,6 +18,7 @@ warnings.filterwarnings("ignore")
 from tensorboardX import SummaryWriter
 
 from vlnbert.vlnbert_init import get_tokenizer
+
 
 log_dir = '/home/joslin/Recurrent-VLN-BERT/snap/%s' % args.name
 if not os.path.exists(log_dir):
@@ -176,21 +176,17 @@ def valid(train_env, tok, val_envs={}):
                 loss_str += ', %s: %.4f' % (metric, val)
             print(loss_str)
 
-        # if args.submit:
-            json.dump(
-                result,
-                open(os.path.join(log_dir, "submit_%s.json" % env_name), 'w'),
-                sort_keys=True, indent=4, separators=(',', ': ')
-            )
+        #if args.submit:
+        json.dump(
+            result,
+            open(os.path.join(log_dir, "submit_%s.json" % env_name), 'w'),
+            sort_keys=True, indent=4, separators=(',', ': ')
+        )
         
             # YZ: print the sorrted tokens
-            '''
-                json.dump(
-                    agent.sort_tokens,
-                    open(os.path.join(log_dir, "instr_%s.json" % env_name), 'w'),
-                    sort_keys=True, indent=4, separators=(',', ': ')
-                )
-            '''
+            
+
+            
             # YZ: output the heatmap of transformer attention
     #np.save("/VL/space/zhan1624/Recurrent-VLN-BERT/attent_heatmap/mean/third_steps.npy", agent.atten_heat, allow_pickle=True)
         # if env_name == "val_seen":
@@ -220,7 +216,6 @@ def train_val(test_only=False):
         val_env_names = ['val_train_seen']
     else:
         featurized_scans = set([key.split("_")[0] for key in list(feat_dict.keys())])
-        #val_env_names = ['val_train_seen', 'val_seen', 'val_unseen']
         val_env_names = ['val_seen', 'val_unseen']
 
     train_env = R2RBatch(feat_dict, batch_size=args.batchSize, splits=['train'], tokenizer=tok, obj_store=obj_dict)

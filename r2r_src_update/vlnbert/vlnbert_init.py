@@ -46,11 +46,12 @@ def get_vlnbert_models(args, config=None):
     elif args.vlnbert == 'prevalent':
         from vlnbert.vlnbert_PREVALENT import VLNBert
         model_class = VLNBert
-        # /home/hlr/shared/data/joslin/pretrain_model/Prevalent/pretrained_model/checkpoint-12864/pytorch_model.bin
-        model_name_or_path = '/home/joslin/PREVALENT_R2R/tasks/R2R/snapshots/action_models/checkpoint-21780/pytorch_model.bin'
+        #model_name_or_path = "/home/hlr/shared/data/joslin/pretrain_model/action_models3/checkpoint-91469/pytorch_model.bin"
+        #model_name_or_path = '/home/hlr/shared/data/joslin/pretrain_model/Prevalent/pretrained_model/checkpoint-12864/pytorch_model.bin'
+        model_name_or_path = "/home/hlr/shared/data/joslin/pretrain_model/action_models_check/checkpoint-21780/pytorch_model.bin"
         vis_config = config_class.from_pretrained('bert-base-uncased')
         vis_config.img_feature_dim = 2176
-        vis_config.img_visn_dim = 2048
+        vis_config.img_visn_dim = 2048 
         vis_config.img_pos_dim = 128
         vis_config.img_feature_type = ""
         vis_config.vl_layers = 4
@@ -60,3 +61,4 @@ def get_vlnbert_models(args, config=None):
         #visual_model = model_class(config=vis_config)
 
     return visual_model
+  
