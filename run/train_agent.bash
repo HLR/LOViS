@@ -9,7 +9,7 @@ flag="--vlnbert prevalent
 
       --features places365
       --maxAction 15
-      --batchSize 8
+      --batchSize 24
       --feedback sample
       --lr 1e-5
       --iters 300000
