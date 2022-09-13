@@ -11,6 +11,6 @@ Pre-training code is in pre-train file, and you can download the pre-training we
 
 ### Run Agent
 
-    bash run/agent.bash 0
+    bash run/train_agent.bash 0
    
    0 is the gpu id.
