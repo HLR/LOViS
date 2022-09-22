@@ -63,6 +63,10 @@ class Param:
         self.parser.add_argument("--using_obj", type=int, default=0)
         self.parser.add_argument("--obj_img_feat_path", type=str, default=None)
 
+
+  
+
+
         self.args = self.parser.parse_args()
 
         if self.args.optim == 'rms':

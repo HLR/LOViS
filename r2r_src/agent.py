@@ -19,7 +19,7 @@ from env import R2RBatch
 import utils
 from utils import padding_idx, print_progress
 # YZ
-import model_OSCAR, model_PREVALENT
+import model_PREVALENT
 import param
 from param import args
 from collections import defaultdict
@@ -98,13 +98,8 @@ class Seq2SeqAgent(BaseAgent):
         self.episode_len = episode_len
         self.feature_size = self.env.feature_size
 
-        # Models
-        if args.vlnbert == 'oscar':
-            self.vln_bert = model_OSCAR.VLNBERT(feature_size=self.feature_size + args.angle_feat_size).cuda() #YZ
-            self.critic = model_OSCAR.Critic().cuda() #YZ
-        elif args.vlnbert == 'prevalent':
-            self.vln_bert = model_PREVALENT.VLNBERT(feature_size=self.feature_size + args.angle_feat_size).cuda()
-            self.critic = model_PREVALENT.Critic().cuda()
+        self.vln_bert = model_PREVALENT.VLNBERT(feature_size=self.feature_size + args.angle_feat_size).cuda()
+        self.critic = model_PREVALENT.Critic().cuda()
         
         self.models = (self.vln_bert, self.critic)
 
@@ -282,8 +277,6 @@ class Seq2SeqAgent(BaseAgent):
         last_dist = np.zeros(batch_size, np.float32)
         last_ndtw = np.zeros(batch_size, np.float32)
         for i, ob in enumerate(perm_obs):   # The init distance from the view point to the target
-            if ob['instr_id'] == "7283_0":
-                print('yue')
             last_dist[i] = ob['distance']
             path_act = [vp[0] for vp in traj[i]['path']]
             if not args.submit:

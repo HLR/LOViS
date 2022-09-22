@@ -3,7 +3,7 @@
 import os
 import sys
 import re
-sys.path.append('build/')
+sys.path.append('/home/joslin/R2R-EnvDrop/build/')
 import MatterSim
 import string
 import json

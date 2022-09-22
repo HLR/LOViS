@@ -2,7 +2,7 @@
 
 import sys
 sys.path.append('buildpy36')
-sys.path.append('Matterport_Simulator/build/')
+sys.path.append('/home/joslin/R2R-EnvDrop/build/')
 import MatterSim
 import csv
 import numpy as np
