@@ -1,7 +1,7 @@
 # LOViS
 
 ### Code for LOViS
-This is the code for the paper ''LOViS: Learning Orientation and Visual Signals for  Vision and Language Navigation''.
+This is the code for the paper ''LOViS: Learning Orientation and Visual Signals for  Vision and Language Navigation''. The paper is accepted by COLING 2022.
 
 ### Environment Installation
 Please refer to [Env-Dropout](https://github.com/airsplay/R2R-EnvDrop) to install the Matterport3D simulators, download Room-to-room dataset and install the python environments. 
