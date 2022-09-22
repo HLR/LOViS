@@ -15,6 +15,10 @@ Pre-training code is in pre-train file, and you can download the pre-training we
     bash run/train_agent.bash 0
    
    0 is the gpu id.
+
+### Test Agent
+
+    bash run/test_agent.bash 0
    
 
 ### Best Results
