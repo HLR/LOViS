@@ -23,6 +23,6 @@ Pre-training code is in pre-train file. You can download the [pre-training weigh
    
 
 ### Best Results
-The following is our best val_unseen result.  [Download Weights](https://drive.google.com/drive/folders/1d24Z2aGRuFF8oQUH5fJdPRLvDnX50hxp?usp=sharing)
+The following is our best val_unseen result.  [Download Weights](https://drive.google.com/drive/folders/1pexzIjMfhqXHspMJnM_U2DXBdqSvK2BV?usp=sharing)
 
     Env name: val_unseen, nav_error: 3.5419, oracle_error: 2.2834, steps: 5.9506, lengths: 11.4193, success_rate: 0.6692, oracle_rate: 0.7361, spl: 0.6176
