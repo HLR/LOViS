@@ -49,6 +49,13 @@ def build_viewpoint_loc_embedding(viewIndex):
         embedding[absViewIndex,   96:] = np.cos(rel_elevation)
     return embedding
 
+def target_loc_embedding(absViewIndex, viewIndex):
+    relViewIndex = (absViewIndex - viewIndex) % 12 + (absViewIndex // 12) * 12
+    rel_heading = (relViewIndex % 12) * angle_inc
+    rel_elevation = (relViewIndex // 12 - 1) * angle_inc
+    return np.array([np.sin(rel_heading), np.cos(rel_heading), np.sin(rel_elevation), np.cos(rel_elevation)], np.float32)
+
+
 # pre-compute all the 36 possible paranoram location embeddings
 _static_loc_embeddings = [
     build_viewpoint_loc_embedding(viewIndex) for viewIndex in range(36)]
@@ -136,170 +143,8 @@ def mask_tokens(inputs, tokenizer, args):
 
     return inputs, labels,attention_mask
 
-class NavBertDataset(data.Dataset):
 
-    def __init__(self, json_dirs, tok, img_path, panoramic):
-
-        # read all json files and create a list of query data
-        self.json_dirs = json_dirs  #  a list of json files
-        self.tok = tok    # should be a lang, vision, action aware tokenizer ['VCLS', 'ACLS']
-        self.mask_index = tok._convert_token_to_id(tok.mask_token)
-        self.feature_store = Feature(img_path, panoramic)
-
-
-        self.data = []
-        self.instr_refer = dict()  # instr_id : instr_encoding
-        for json_dir in self.json_dirs:
-            with open(json_dir) as f:
-                current_trajs = json.load(f)
-                for traj in current_trajs:
-                    self.data += self.disentangle_path(traj)
-
-
-    def __getitem__(self, index):
-        # you must return data and label pair tensor
-        query = self.data[index]
-        output = self.getQuery(query)
-        return {key:torch.tensor(value) for key,value in output.items()}
-
-
-    def __len__(self):
-        return len(self.data)
-
-
-    def disentangle_path(self, traj):
-        query = list()
-        instr_id = traj['instr_id']
-        instruction = traj['instr_encoding']
-        self.instr_refer[instr_id] = instruction
-
-        path = traj['path']
-        actions = traj['teacher_actions']
-        action_emds = traj['teacher_action_emd']
-        for t in range(len(path)):
-            scan = path[t][0]
-            viewpoint = path[t][1]
-            viewIndex = path[t][2]
-            teacher_action = actions[t]
-            absViewIndex, rel_heading, rel_elevation = action_emds[t]
-
-            current_query = SingleQuery(instr_id, scan, viewpoint, viewIndex, teacher_action, absViewIndex, rel_heading,rel_elevation)
-            if t <= len(path) - 2:
-                next_scan = path[t+1][0]
-                next_viewpoint = path[t+1][1]
-                next_viewIndex = path[t+1][2]
-                next_teacher_action = actions[t+1]
-                next_absViewIndex, next_rel_heading, next_rel_elevation = action_emds[t+1]
-                next_query = SingleQuery(instr_id, next_scan, next_viewpoint, next_viewIndex, next_teacher_action, next_absViewIndex, next_rel_heading, next_rel_elevation)
-            else:
-                next_query = current_query
-
-
-            current_query.next = next_query
-            query.append(current_query)  # a list of (SASA)
-
-        return query
-
-    def getQuery(self, query):
-        # prepare text tensor
-        output = dict()
-        text_seq = self.instr_refer[query.instr_id]
-        masked_text_seq, masked_text_label = self.random_word(text_seq)
-        output['masked_text_seq'] = masked_text_seq
-        output['masked_text_label'] = masked_text_label
-
-        # prepare vision tensor
-        scan, viewpoint, viewindex = query.scan, query.viewpoint, query.viewIndex
-        feature_all, feature_1 = self.feature_store.rollout(scan, viewpoint, viewindex)
-        feature_with_loc_all = np.concatenate((feature_all, _static_loc_embeddings[viewindex]), axis=-1)
-        output['feature_all'] = feature_with_loc_all
-
-        # prepare action
-        if query.absViewIndex == -1:
-            teacher_action_embedding = np.zeros(feature_all.shape[-1] + 128, np.float32)
-        else:
-            teacher_view = feature_all[query.absViewIndex, :]
-            loc_embedding = np.zeros(128, np.float32)
-            loc_embedding[0:32] = np.sin(query.rel_heading)
-            loc_embedding[32:64] = np.cos(query.rel_heading)
-            loc_embedding[64:96] = np.sin(query.rel_elevation)
-            loc_embedding[96:] = np.cos(query.rel_elevation)
-            teacher_action_embedding = np.concatenate((teacher_view, loc_embedding))
-        output['teacher'] = query.teacher_action
-        output['teacher_embedding'] = teacher_action_embedding
-
-
-        # prepare next step info
-        nscan, nviewpoint, nviewindex = query.next.scan, query.next.viewpoint, query.next.viewIndex
-        nfeature_all, nfeature_1 = self.feature_store.rollout(nscan, nviewpoint, nviewindex)
-        nfeature_with_loc_all = np.concatenate((nfeature_all, _static_loc_embeddings[nviewindex]), axis=-1)
-        output['next_feature_all'] = nfeature_with_loc_all
-
-        if query.next.absViewIndex == -1:
-            nteacher_action_embedding = np.zeros(feature_all.shape[-1] + 128, np.float32)
-        else:
-            nteacher_view = nfeature_all[query.next.absViewIndex, :]
-            nloc_embedding = np.zeros(128, np.float32)
-            nloc_embedding[0:32] = np.sin(query.next.rel_heading)
-            nloc_embedding[32:64] = np.cos(query.next.rel_heading)
-            nloc_embedding[64:96] = np.sin(query.next.rel_elevation)
-            nloc_embedding[96:] = np.cos(query.next.rel_elevation)
-            nteacher_action_embedding = np.concatenate((nteacher_view, nloc_embedding))
-        output['next_teacher'] = query.next.teacher_action
-        output['next_teacher_embedding'] = nteacher_action_embedding
-
-
-        # prepare random next step info
-        prob = np.random.random()
-        if prob <= 0.5:
-            output['isnext'] = 1
-            output['next_img'] = output['next_feature_all']
-        else:
-            output['isnext'] = 0
-            candidates = list(range(36))
-            candidates.remove(nviewindex)
-            fake_nviewindex = np.random.choice(candidates)
-            ffeature_all, ffeature_1 = self.feature_store.rollout(nscan, nviewpoint, fake_nviewindex)
-            ffeature_with_loc_all = np.concatenate((ffeature_all, _static_loc_embeddings[fake_nviewindex]), axis=-1)
-            output['next_img'] = ffeature_with_loc_all
-
-        return output
-
-
-
-
-    def random_word(self, text_seq):
-        tokens = text_seq.copy()   # already be [cls t1 t2 sep]
-        output_label = []
-
-        for i, token in enumerate(tokens):
-            if i ==0 or i == len(tokens) - 1:
-                output_label.append(0)
-                continue
-            prob = np.random.random()
-            if prob < 0.15:
-                prob /= 0.15
-
-                output_label.append(tokens[i])
-
-                # 80% randomly change token to mask token
-                if prob < 0.8:
-                    tokens[i] = self.mask_index
-
-                # 10% randomly change token to random token
-                elif prob < 0.9:
-                    tokens[i] = random.randrange(len(self.tok))
-
-                # 10% randomly change token to current token
-                else:
-                    tokens[i] = tokens[i]   # just keep it
-
-
-            else:
-                tokens[i] = tokens[i]   # just keep it
-                output_label.append(0)
-
-        return tokens, output_label
+              
 
 class NavDataset(data.Dataset):
 
@@ -340,7 +185,7 @@ class NavDataset(data.Dataset):
         self.instr_refer[instr_id] = instruction
 
         path = traj['path']
-        actions = traj['teacher_actions']
+        actions = list(list(zip(*path))[2])[1:]+[0]
         action_emds = traj['teacher_action_emd']
         for t in range(len(path)):
             scan = path[t][0]
@@ -380,6 +225,7 @@ class NavDataset(data.Dataset):
         feature_all, feature_1 = self.feature_store.rollout(scan, viewpoint, viewindex)
         feature_with_loc_all = np.concatenate((feature_all, _static_loc_embeddings[viewindex]), axis=-1)
         output['feature_all'] = feature_with_loc_all
+        output['target_loc'] = torch.tensor(target_loc_embedding(viewindex, query.teacher_action))
 
         # prepare action
         if query.absViewIndex == -1:
@@ -429,10 +275,25 @@ class NavDataset(data.Dataset):
             ffeature_all, ffeature_1 = self.feature_store.rollout(nscan, nviewpoint, fake_nviewindex)
             ffeature_with_loc_all = np.concatenate((ffeature_all, _static_loc_embeddings[fake_nviewindex]), axis=-1)
             output['next_img'] = ffeature_with_loc_all
-
+        
+        # prepare vision matching
+        if prob <= 0.5:
+            output['match'] = torch.tensor(1.0)
+        else:
+            import random
+            output['match'] = torch.tensor(0.0)
+            scan_view_list = list(self.feature_store.features.keys())
+            scan_view_list = [i for i in scan_view_list if scan not in i]
+            fake_img = random.choice(scan_view_list)
+            fake_scan, fake_viewpoint = fake_img.split("_")
+            fake_img_feat, _ = self.feature_store.rollout(fake_scan, fake_viewpoint, viewindex)
+            fake_img_feat_loc = np.concatenate((fake_img_feat, _static_loc_embeddings[viewindex]), axis=-1)
+            output['feature_all'] = fake_img_feat_loc
+            output['teacher'] = -1
+        
+        # prepare orientation matching
+        output['orient_target'] = _static_loc_embeddings[viewindex][viewindex]
         return output
-
-
 
 
     def random_word(self, text_seq):
@@ -659,15 +520,15 @@ def Test():
                          "or remove the --do_eval argument.")
 
 
-    # import glob
-    # jfiles = glob.glob("./collect_traj" + "/*.json")
-    # params = {'batch_size':20, 'shuffle': False, 'num_workers': 1}
-    # tok = BertTokenizer.from_pretrained('bert-base-uncased')
-    # dataset = NavDataset(jfiles, tok, feature_store, panoramic,args)
-    # print("you have loaded %d  time steps" % (len(dataset)))
+    import glob
+    jfiles = glob.glob("./collect_traj" + "/*.json")
+    params = {'batch_size':20, 'shuffle': False, 'num_workers': 1}
+    tok = BertTokenizer.from_pretrained('bert-base-uncased')
+    dataset = NavDataset(jfiles, tok, feature_store, panoramic,args)
+    print("you have loaded %d  time steps" % (len(dataset)))
     #pdb.set_trace()
-    # data_gen = data.DataLoader(dataset, **params)
-    # obj  = next(iter(data_gen))
+    data_gen = data.DataLoader(dataset, **params)
+    obj  = next(iter(data_gen))
     #print(obj.keys())
 
 
@@ -677,6 +538,7 @@ def Test():
 
 
 #Test()
+
 
 
 

@@ -9,7 +9,7 @@ import logging
 import math
 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import pickle
 
 import random
@@ -40,7 +40,7 @@ from pytorch_transformers import (WEIGHTS_NAME, AdamW, WarmupLinearSchedule,
 
 
 logger = logging.getLogger(__name__)
-tb_writer = SummaryWriter('/home/joslin/PREVALENT_R2R/tasks/R2R/snapshots/action_models/snap/')
+tb_writer = SummaryWriter('/egr/research-hlr/joslin/pretrain/action_new/snap/')
 
 MODEL_CLASSES = {
 
@@ -83,9 +83,6 @@ class TextDataset(Dataset):
 
 
             tokenized_text = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(text))
-
-
-
             for i in range(0, len(tokenized_text)-block_size+1, block_size): # Truncate in block of block_size
 
                 self.examples.append(tokenizer.add_special_tokens_single_sequence(tokenized_text[i:i+block_size]))
@@ -96,15 +93,11 @@ class TextDataset(Dataset):
 
             # can change this behavior by adding (model specific) padding.
 
-
-
             logger.info("Saving features into cached file %s", cached_features_file)
 
             with open(cached_features_file, 'wb') as handle:
 
                 pickle.dump(self.examples, handle, protocol=pickle.HIGHEST_PROTOCOL)
-
-
 
     def __len__(self):
 
@@ -239,9 +232,9 @@ def train(args, train_dataset, model, tokenizer):
 
     # multi-gpu training (should be after apex fp16 initialization)
 
-    if args.n_gpu > 1:
+    # if args.n_gpu > 1:
 
-        model = torch.nn.DataParallel(model)
+    #     model = torch.nn.DataParallel(model)
 
 
 
@@ -304,32 +297,30 @@ def train(args, train_dataset, model, tokenizer):
             img_feats = img_feats.to(args.device)
             lang_attention_mask = lang_attention_mask.to(args.device)
             #vis_mask = vis_mask.to(args.device)
-
-            if args.is_match:
-                match_label = batch['match_label']
-                match_label = match_label.to(args.device)
-            
-            if args.tmporal_loss:
-                step_mask = torch.tensor(batch["step_mask"])
-                step_label = batch['step_label']
-                step_label = step_label.to(args.device)   
-                step_mask = step_mask.to(args.device)     
-
+               
             model.train()
 
             #outputs = model(inputs, masked_lm_labels=labels) if args.mlm else model(inputs, labels=labels)
             if args.include_next:
                 actions = batch['teacher']
                 actions = actions.to(args.device)
-                outputs = model(inputs,labels,actions,img_feats,lang_mask=lang_attention_mask)
-            else:
-                if args.is_match:
-                    outputs = model(inputs,labels, None, img_feats,lang_mask=lang_attention_mask, vis_mask=vis_mask, matched_label=match_label)
-                elif args.tmporal_loss:
-                    outputs = model(inputs,labels, None, img_feats,lang_mask=lang_attention_mask, vis_mask=vis_mask, \
-                                    step_label=step_label, step_mask=step_mask)
+                ### vision match
+                if args.vision_match:
+                    match_label = batch['match'].to(args.device)
                 else:
-                    outputs = model(inputs,labels, None, img_feats,lang_mask=lang_attention_mask)
+                    match_label = None
+
+                ### orient match
+                if args.orient_match:
+                    orient_label = batch['target_loc'].to(args.device)
+                else:
+                    orient_label = None
+                
+                outputs = model(inputs,labels,actions,img_feats,lang_mask=lang_attention_mask, 
+                                match_label=match_label, orient_label=orient_label)
+            else:
+                outputs = model(inputs,labels, None, img_feats,lang_mask=lang_attention_mask)
+
 
             loss, mask_loss, next_loss = outputs  # model outputs are always tuple in transformers (see doc)
             
@@ -339,8 +330,8 @@ def train(args, train_dataset, model, tokenizer):
                 loss = loss.mean()  # mean() to average on multi-gpu parallel training
 
                 # YZ
-                # mask_loss = mask_loss.mean()
-                # step_loss = step_loss.mean()
+                mask_loss = mask_loss.mean()
+                next_loss = next_loss.mean()
 
             if args.gradient_accumulation_steps > 1:
 
@@ -522,8 +513,7 @@ def evaluate(args, model, tokenizer, prefix=""):
 
 
 
-feature_store = '/home/hlr/shared/data/joslin/img_features/ResNet-152-places365.tsv'
-
+feature_store = '/egr/research-hlr/joslin/img_features/ResNet-152-places365.tsv'
 panoramic = True
 
 
@@ -533,12 +523,12 @@ def main():
 
 
     ## Required parameters
-
-    parser.add_argument("--train_data_file", default="/home/joslin/PREVALENT_R2R/tasks/R2R/data/collect_traj/", type=str,
+    parser.add_argument("--train_data_file", default="/VL/space/zhan1624/PREVALENT_R2R/tasks/R2R/data/collect_traj/", type=str,
 
                         help="The input training data file (a text file).")
-
-    parser.add_argument("--output_dir", default="/home/joslin/PREVALENT_R2R/tasks/R2R/snapshots/action_models/", type=str,
+                        
+    # action_models1: zy design
+    parser.add_argument("--output_dir", default="/egr/research-hlr/joslin/pretrain/action_new/", type=str,
 
                         help="The output directory where the model predictions and checkpoints will be written.")
 
@@ -555,8 +545,8 @@ def main():
     parser.add_argument("--model_type", default="bert", type=str,
 
                         help="The model architecture to be fine-tuned.")
-    #/home/joslin/PREVALENT_R2R/pretrained_hug_models/dicadd/checkpoint-12864/
-    parser.add_argument("--model_name_or_path", default="/home/joslin/PREVALENT_R2R/pretrained_hug_models/dicadd/checkpoint-12864/", type=str,
+    # /VL/space/zhan1624/PREVALENT_R2R/pretrained_hug_models/dicadd/checkpoint-12864/
+    parser.add_argument("--model_name_or_path", default="/egr/research-hlr/joslin/pretrain/action_rxr/checkpoint-169858", type=str,
 
                         help="The model checkpoint for weights initialization.")
 
@@ -608,9 +598,7 @@ def main():
 
                         help="Set this flag if you are using an uncased model.")
 
-
-
-    parser.add_argument("--per_gpu_train_batch_size", default=24, type=int,
+    parser.add_argument("--per_gpu_train_batch_size", default=4, type=int,
 
                         help="Batch size per GPU/CPU for training.")
 
@@ -700,7 +688,7 @@ def main():
 
     parser.add_argument('--server_port', type=str, default='', help="For distant debugging.")
 
-    parser.add_argument("--vision_size", type=int, default=2176,help="imgaction size")
+    parser.add_argument("--vision_size", type=int, default=2048+128,help="imgaction size")
     parser.add_argument("--action_space", type=int, default=36,help="action space")
     parser.add_argument("--vl_layers", type=int, default=4,help="how many fusion layers")
     parser.add_argument("--la_layers", type=int, default=9,help="how many lang layers")
@@ -718,16 +706,8 @@ def main():
     parser.add_argument('--philly', action='store_true', help='program runs on Philly, used to redirect `write_model_path`')
 
     #
-    parser.add_argument("--landmark_mask", action='store_true', default=False)
-    parser.add_argument("--sub_instr", action='store_true', default=False)
-    parser.add_argument("--is_match", action='store_true', default=False)
-    parser.add_argument("--tmporal_loss", action='store_true', default=False)
-    parser.add_argument("--landmark_path", type=str, default='/home/joslin/PREVALENT_R2R/tasks/R2R/data/landmark.txt', help="landmark_dir")
-    parser.add_argument("--spatial_path", type=str, default='/home/joslin/PREVALENT_R2R/tasks/R2R/data/spatial.txt', help="spatial_dir")
-    parser.add_argument("--candi_path", type=str, default='/home/hlr/shared/data/joslin/candidate.npy', help="landmark_dir")
-    parser.add_argument("--max_lan", type=int, default=80)
-    parser.add_argument("--max_img", type=int, default=8)
-    parser.add_argument("--max_sub_step", type=int, default=12)
+    parser.add_argument("--vision_match", action='store_true', default=True)
+    parser.add_argument("--orient_match", action='store_true', default=True)
     args = parser.parse_args()
 
     if args.philly: # use philly
@@ -786,8 +766,8 @@ def main():
 
         device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
 
-        #args.n_gpu = torch.cuda.device_count()
-        args.n_gpu = 1
+        args.n_gpu = torch.cuda.device_count()
+        #args.n_gpu = 1
         
 
         print("You are using %d GPUs to train!!" % (args.n_gpu))
@@ -848,13 +828,14 @@ def main():
 
     
     config.img_feature_dim = args.vision_size
+    config.img_visn_dim = 2048
+    config.img_pos_dim = 128
     config.img_feature_type = ""
     config.update_lang_bert = args.update
     config.update_add_layer = args.update_add_layer
     config.vl_layers = args.vl_layers
     config.la_layers = args.la_layers
     config.action_space = args.action_space
-    config.progress_step = args.max_sub_step
     model_class = DicAddActionPreTrain
     model = model_class.from_pretrained(args.model_name_or_path, from_tf=bool('.ckpt' in args.model_name_or_path), config=config)
     #model = DicAddActionPreTrain(config)

@@ -73,7 +73,7 @@ class VicAddActionPreTrain(BertPreTrainedModel):
 
 
     def tie_weights(self):
-        self._tie_or_clone_weights(self.mlmhead.predictions.decoder,self.bert.embeddings.word_embeddings)
+        self._tie_or_clone_weights(self.mlmhead.predictions.decoder, self.bert.embeddings.word_embeddings)
 
 
     def forward(self, seq,labels, isnext=None, f_t_all = None,lang_mask=None):
@@ -103,13 +103,14 @@ class DicAddActionPreTrain(BertPreTrainedModel):
         self.config = config
         self.bert = DicModel(config)
 
-
-        self.next_action = NextActionPrediction(self.config.hidden_size, self.config.action_space)
-        self.step_progress = ProgressMonitor(self.config.hidden_size, self.config.progress_step)
+        self.matching = MatchPrediction(self.config.hidden_size, 1)
+        self.orient_matching = OrientMatchPrediction(self.config.hidden_size, 4)
         self.criterion = nn.CrossEntropyLoss(ignore_index=-1)
+        self.orient_criterion = nn.MSELoss()
+        self.match_criterion = nn.BCELoss()
         self.alignment = AlignmentMatrix()
-        #self.mlmhead = BertOnlyMLMHead(self.config)
-        self.cls = BertPreTrainingHeads(self.config)
+        self.mlmhead = BertOnlyMLMHead(self.config)
+        #self.cls = BertPreTrainingHeads(self.config)
         self.cosin_sim = nn.CosineSimilarity(dim=-1, eps=1e-6)
 
         self.init_weights()
@@ -117,48 +118,43 @@ class DicAddActionPreTrain(BertPreTrainedModel):
 
 
     def tie_weights(self):
-        #self._tie_or_clone_weights(self.mlmhead.predictions.decoder,self.bert.embeddings.word_embeddings)
-        self._tie_or_clone_weights(self.cls.predictions.decoder,self.bert.embeddings.word_embeddings)
+        self._tie_or_clone_weights(self.mlmhead.predictions.decoder,self.bert.embeddings.word_embeddings)
+
 
     def forward(self, seq,labels,isnext=None, f_t_all = None,lang_mask=None, vis_mask=None, \
-                matched_label=None, step_label=None, step_mask=None):
+                match_label=None, orient_label=None):
 
-        ctx, pooled_out, visn_output = self.bert(seq, attention_mask=lang_mask,img_feats=f_t_all)
+        ctx, pooled_out, vision_score, only_vision_pooled_output,  pos_pooled_output = self.bert(seq, attention_mask=lang_mask,img_feats=f_t_all)
+
 
         cls_part = pooled_out
         lang_part = ctx
 
-        #prediction_scores = self.mlmhead(lang_part)
-        prediction_scores, cross_relationship_score = self.cls(lang_part, cls_part)
-
-        ### Mask loss
-        mask_loss = 0
+        prediction_scores = self.mlmhead(lang_part)
         mask_loss = self.criterion(prediction_scores.view(-1,self.config.vocab_size), labels.view(-1))
+
         
-        ### Next action loss
+        #action_scores = self.next_action(cls_part)
+        action_scores = vision_score
+
         next_loss = 0
-        # action_scores = self.next_action(cls_part)
-        action_scores = visn_output
         if isnext is not None:
             next_loss = self.criterion(action_scores, isnext)
+        
 
-        ### Match loss
-        # match_loss = 0
-        # if matched_label is not None:
-        #     match_loss = self.criterion(cross_relationship_score.view(-1, 2), matched_label.view(-1))
+        loss = mask_loss + next_loss
+
+        if match_label is not None:
+            predict_match = self.matching(only_vision_pooled_output)
+            match_loss = self.match_criterion(predict_match, match_label)
+            loss += match_loss
         
-        ### step progress loss
-        # step_loss = 0
-        # if step_label is not None:
-        #     step_logit = self.step_progress(cls_part)
-        #     new_step_logit = step_logit.clone().masked_fill_(step_mask, -float('inf'))
-        #     step_loss = self.criterion(new_step_logit, step_label)
-        
-        loss = mask_loss + next_loss 
+        if orient_label is not None:
+            predict_orient_match = self.orient_matching(pos_pooled_output)
+            orient_match_loss = self.orient_criterion(predict_orient_match, orient_label)
+            loss += orient_match_loss
 
         return loss, mask_loss, next_loss
-
-
 
 
 class BertAddPreTrain(nn.Module):
@@ -551,6 +547,31 @@ class NextActionPrediction(nn.Module):
     def forward(self, x):
         return self.softmax(self.linear(x))  # the 0-35 is the vision, 36th is the CLS token
 
+
+class MatchPrediction(nn.Module):
+    def __init__(self, hidden, actionspace):
+        """
+        :param hidden: BERT model output size
+        """
+        super().__init__()
+        self.linear = nn.Linear(hidden, actionspace)
+        self.softmax = nn.LogSoftmax(dim=-1)
+
+    def forward(self, x):
+        return self.softmax(self.linear(x))  
+
+
+class OrientMatchPrediction(nn.Module):
+    def __init__(self, hidden, actionspace):
+        """
+        :param hidden: BERT model output size
+        """
+        super().__init__()
+        self.linear = nn.Linear(hidden, actionspace)
+        self.softmax = nn.LogSoftmax(dim=-1)
+
+    def forward(self, x):
+        return self.softmax(self.linear(x)) 
 
 class ProgressMonitor(nn.Module):
     """

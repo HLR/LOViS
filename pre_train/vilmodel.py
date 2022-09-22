@@ -1051,24 +1051,43 @@ class LXRTXLayer(nn.Module):
         return lang_output, visn_output
 
     def forward(self, lang_feats, lang_attention_mask,
-                      visn_feats, visn_attention_mask):
+                      visn_feats, visn_attention_mask, lang_only_vision_feats=None, only_visn_feats=None, lang_pos_feats=None, pos_feats=None):
         
         lang_att_output = lang_feats
         visn_att_output = visn_feats
         
         lang_att_output, visn_att_output = self.cross_att(lang_att_output, lang_attention_mask,
                                                           visn_att_output, visn_attention_mask)
-
         visn_att_output = torch.cat((lang_att_output[:, 0:1, :], visn_att_output), dim=1)
         state_vis_mask = torch.cat((lang_attention_mask[:,:,:,0:1], visn_attention_mask), dim=-1)
-
         lang_att_output, visn_att_output = self.self_att(lang_att_output, lang_attention_mask, visn_att_output, state_vis_mask)
 
+        ## only vision
+        lang_att_only_vision = lang_only_vision_feats
+        only_visn_output = only_visn_feats
+        lang_att_only_vision, only_visn_att_output = self.cross_att(lang_att_only_vision, lang_attention_mask,
+                                                          only_visn_output, visn_attention_mask)
+        lang_att_only_vision, only_visn_att_output = self.self_att(lang_att_only_vision, lang_attention_mask,
+                                                         only_visn_att_output, visn_attention_mask)
+        
+        ## only pos
+        lang_att_pos = lang_pos_feats
+        pos_output = pos_feats
+        lang_att_pos, pos_att_output = self.cross_att(lang_att_pos, lang_attention_mask,
+                                                          pos_output, visn_attention_mask)
+        lang_att_pos, pos_att_output = self.self_att(lang_att_pos, lang_attention_mask,
+                                                         pos_att_output, visn_attention_mask)
+
+        ##
         lang_output, visn_output = self.output_fc(lang_att_output[0], visn_att_output[0][:,1:,:])
+        lang_only_vision_output, only_vision_output = self.output_fc(lang_att_only_vision[0], only_visn_att_output[0])
+        lang_only_pos_output, only_pos_output = self.output_fc(lang_att_pos[0], pos_att_output[0])
 
         visual_attention_scores = visn_att_output[1].mean(dim=1)[:, 0, 1:]
 
-        return lang_output, visn_output, visual_attention_scores
+        return lang_output, visn_output, visual_attention_scores, \
+               lang_only_vision_output, only_vision_output, \
+               lang_only_pos_output, only_pos_output
 
 
 class VisionEncoder(nn.Module):
@@ -1096,6 +1115,51 @@ class VisionEncoder(nn.Module):
         output = self.dropout(x)
         return output
 
+class PositionEncoder(nn.Module):
+    def __init__(self, vision_size, config):
+        super().__init__()
+        feat_dim = vision_size
+        #pos_dim = VISUAL_CONFIG.visual_pos_dim
+
+        # Object feature encoding
+        self.pos_fc = nn.Linear(feat_dim, config.hidden_size)
+        self.pos_layer_norm = BertLayerNorm(config.hidden_size, eps=1e-12)
+
+        # Box position encoding
+        #self.box_fc = nn.Linear(pos_dim, config.hidden_size)
+        #self.box_layer_norm = BertLayerNorm(config.hidden_size, eps=1e-12)
+
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+
+    def forward(self, visn_input):
+        #feats, boxes = visn_input
+        feats = visn_input
+
+        x = self.pos_fc(feats)
+        x = self.pos_layer_norm(x)
+        output = self.dropout(x)
+        return output
+
+class OnlyImgEncoder(nn.Module):
+    def __init__(self, vision_size, config):
+        super().__init__()
+        feat_dim = vision_size
+        #pos_dim = VISUAL_CONFIG.visual_pos_dim
+
+        # Object feature encoding
+        self.onlyimg_fc = nn.Linear(feat_dim, config.hidden_size)
+        self.onlyimg_layer_norm = BertLayerNorm(config.hidden_size, eps=1e-12)
+
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+
+    def forward(self, visn_input):
+        #feats, boxes = visn_input
+        feats = visn_input
+
+        x = self.onlyimg_fc(feats)
+        x = self.onlyimg_layer_norm(x)
+        output = self.dropout(x)
+        return output
 
 class VicModel(BertPreTrainedModel):
     r"""
@@ -1293,6 +1357,8 @@ class DicModel(BertPreTrainedModel):
             [LXRTXLayer(config) for _ in range(self.vl_layers)]
         )
         self.vision_encoder = VisionEncoder(self.config.img_feature_dim, self.config)
+        self.only_img_encoder = OnlyImgEncoder(self.config.img_visn_dim, self.config)
+        self.pos_encoder = PositionEncoder(self.config.img_pos_dim, self.config)
 
         self.init_weights()
 
@@ -1374,18 +1440,31 @@ class DicModel(BertPreTrainedModel):
             img_mask = extended_img_mask
 
             lang_output = text_embeds
+            lang_only_vision_output = text_embeds
+            lang_only_pos_output = text_embeds
             visn_output = img_embedding_output
+            visn_feats, pos_feats = img_feats[:,:,:self.config.img_visn_dim], img_feats[:,:,self.config.img_visn_dim:]
+            only_vision_output = self.only_img_encoder(visn_feats)
+            pos_embedding_output = self.pos_encoder(pos_feats)
+            only_visn_output = only_vision_output
+            pos_output = pos_embedding_output
 
             for layer_module in self.addlayer:
-                lang_output, visn_output, vision_score = layer_module(lang_output,text_mask,visn_output,img_mask)
+                lang_output, visn_output, vision_score, lang_only_vision_output, only_visn_output, lang_only_pos_output, pos_output = layer_module(lang_output,text_mask,visn_output,img_mask, 
+                                                                    lang_only_vision_output, only_visn_output, lang_only_pos_output, pos_output)
 
             if not self.update_add_layer:
                 lang_output = lang_output.detach()
                 visn_output = visn_output.detach()
 
             sequence_output = lang_output
+            only_vision_sequence_output = lang_only_vision_output
+            pos_sequence_output = lang_only_pos_output
             pooled_output = self.pooler(sequence_output)
-            outputs = (sequence_output, pooled_output, vision_score) 
+            only_vision_pooled_output =  self.pooler(only_vision_sequence_output)
+            pos_pooled_output = self.pooler(pos_sequence_output)
+
+            outputs = (sequence_output, pooled_output, vision_score, only_vision_pooled_output,  pos_pooled_output) 
         else:
             sequence_output = text_embeds
             pooled_output = self.pooler(sequence_output)
